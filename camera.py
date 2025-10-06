@@ -5,16 +5,74 @@ import time
 import uuid
 import hmac
 import hashlib
+import base64
+import tempfile
 import requests
 import cv2
-from flask import Flask, Response, jsonify
+
+from functools import wraps
+from urllib.parse import quote_plus
+from flask import Flask, Response, jsonify, request, session, redirect, url_for
 from tuya_connector import TuyaOpenAPI, TUYA_LOGGER
 from dotenv import load_dotenv
+
+# ==== DB (SQLAlchemy) sem DB_SSL (TLS sem validação) ====
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import sessionmaker, declarative_base, scoped_session
+from urllib.parse import quote_plus
 
 # =========================================
 # Carrega variáveis do .env
 # =========================================
 load_dotenv()
+
+# ====== CONFIG FLASK/SESSÃO ======
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "troque-esta-chave")
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+if os.getenv("FLASK_ENV") == "production":
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+# ==== DB (SQLAlchemy) sem DB_SSL (TLS sem validação) ====
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import sessionmaker, declarative_base, scoped_session
+from urllib.parse import quote_plus
+import os
+
+def _build_engine_from_env():
+    host = os.getenv("DB_HOST")
+    name = os.getenv("DB_NAME", "defaultdb")
+    user = os.getenv("DB_USER")
+    pwd  = os.getenv("DB_PASSWORD", "")
+    port = os.getenv("DB_PORT", "3306")
+
+    if not all([host, name, user, pwd, port]):
+        raise RuntimeError("Defina: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD e DB_PORT.")
+
+    # força mysql-connector
+    db_url = f"mysql+mysqlconnector://{quote_plus(user)}:{quote_plus(pwd)}@{host}:{port}/{name}"
+
+    # >>> PASSE COMO BOOLEANOS, NÃO NA URL <<<
+    connect_args = {
+        "ssl_verify_cert": False,
+        "ssl_verify_identity": False,
+    }
+
+    engine = create_engine(db_url, pool_pre_ping=True, connect_args=connect_args)
+    print("DRIVER DB:", engine.url.drivername)  # deve ser mysql+mysqlconnector
+    return engine
+
+engine = _build_engine_from_env()
+SessionLocal = scoped_session(sessionmaker(bind=engine, autocommit=False, autoflush=False))
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+    id            = Column(Integer, primary_key=True)
+    email         = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+
+Base.metadata.create_all(bind=engine)
 
 # ====== CÂMERA (TuyaOpenAPI/SDK) ======
 ACCESS_ID  = os.getenv("TUYA_ACCESS_ID")
@@ -44,14 +102,23 @@ try:
 except Exception as e:
     print("[AVISO] Falha ao conectar TuyaOpenAPI (câmera):", e)
 
-app = Flask(__name__)
-
 _last_stream_resp = None
 _last_stream_url = None
 _last_error = None
 
 # =========================================
-# Helpers CÂMERA (MJPEG)
+# Auth helper
+# =========================================
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return wrapper
+
+# =========================================
+# CÂMERA (helpers)
 # =========================================
 def _allocate_stream():
     """
@@ -125,9 +192,69 @@ def generate_frames(stream_url: str):
             cap.release()
 
 # =========================================
-# Rotas CÂMERA
+# ROTAS: Login / Logout
+# =========================================
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("app_home"))
+
+    error = None
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        password = (request.form.get("password") or "").strip()
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter_by(email=email).first()
+            # sem hash: compara texto puro
+            if user and user.password_hash == password:
+                session["user_id"] = user.id
+                nxt = request.args.get("next") or url_for("app_home")
+                return redirect(nxt)
+            error = "Credenciais inválidas."
+        finally:
+            db.close()
+
+
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8"/>
+        <title>Login</title>
+        <style>
+            body {{ font-family: system-ui, Segoe UI, Arial; display:grid; place-items:center; height:100vh; margin:0; background:#f5f6f8; }}
+            .card {{ width: 360px; background:#fff; border:1px solid #ddd; border-radius:12px; padding:24px; box-shadow:0 2px 8px rgba(0,0,0,.05); }}
+            input {{ width:100%; padding:12px; margin:6px 0 12px 0; border:1px solid #ccc; border-radius:8px; }}
+            button {{ width:100%; padding:12px; border-radius:8px; border:1px solid #888; background:#fafafa; cursor:pointer; }}
+            .err {{ color:#c0392b; margin-bottom:8px; }}
+        </style>
+    </head>
+    <body>
+        <form class="card" method="POST">
+            <h2>Entrar</h2>
+            {"<div class='err'>"+error+"</div>" if error else ""}
+            <label>E-mail</label>
+            <input type="email" name="email" placeholder="voce@exemplo.com" required />
+            <label>Senha</label>
+            <input type="password" name="password" placeholder="••••••••" required />
+            <button type="submit">Acessar</button>
+        </form>
+    </body>
+    </html>
+    """
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+# =========================================
+# ROTAS: Câmera (protegidas)
 # =========================================
 @app.route('/video_feed')
+@login_required
 def video_feed():
     url = _allocate_stream()
     if not url:
@@ -137,6 +264,7 @@ def video_feed():
     return Response(generate_frames(url), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/debug_stream')
+@login_required
 def debug_stream():
     return jsonify({
         "last_error": _last_error,
@@ -145,7 +273,7 @@ def debug_stream():
     })
 
 # =========================================
-# Helpers PORTÃO (HMAC)
+# PORTÃO (HMAC)
 # =========================================
 EMPTY_BODY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
@@ -231,14 +359,11 @@ def pulse_gate():
     return resp_on, resp_off
 
 # =========================================
-# Rotas PORTÃO
+# Rota do Portão (protegida)
 # =========================================
 @app.route('/gate/pulse', methods=['POST'])
+@login_required
 def gate_pulse():
-    """
-    Chame via fetch POST para acionar o portão.
-    Responde JSON com os retornos ON/OFF.
-    """
     try:
         resp_on, resp_off = pulse_gate()
         return jsonify({"ok": True, "on": resp_on, "off": resp_off})
@@ -247,8 +372,12 @@ def gate_pulse():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-@app.route('/')
-def index():
+# =========================================
+# Página APP (vídeo + botão) — protegida
+# =========================================
+@app.route('/app')
+@login_required
+def app_home():
     return f"""
     <!DOCTYPE html>
     <html>
@@ -265,33 +394,27 @@ def index():
             body{{font-family:system-ui,Segoe UI,Arial;margin:24px}}
             .row{{display:flex;gap:var(--gap);align-items:flex-start;flex-wrap:wrap}}
             .card{{border:1px solid #ddd;border-radius:var(--radius);padding:16px;box-shadow:var(--card-shadow);background:#fff}}
-            .card.live{{flex: 1 1 100%;}} /* câmera ocupa toda a linha */
-            .card.gate{{flex: 1 1 360px;max-width: 520px;}} /* portão ao lado/abaixo conforme espaço */
-
+            .card.live{{flex: 1 1 100%;}}
+            .card.gate{{flex: 1 1 360px;max-width: 520px;}}
             .toolbar{{display:flex;gap:10px;margin-bottom:10px;align-items:center;flex-wrap:wrap}}
             button{{padding:10px 16px;border-radius:10px;border:1px solid #888;cursor:pointer;background:#fafafa}}
             button:disabled{{opacity:.5;cursor:not-allowed}}
             #status{{margin-top:8px;font-family:Consolas,monospace;white-space:pre-wrap}}
-
-            /* Caixa do vídeo grandona */
             .video-box{{position:relative;width:100%;}}
-            /* O truque pra “aumentar a tela” está aqui: usa quase toda a altura da janela */
             .video-box img{{
-                display:block;
-                width:100%;
-                height:auto;
-                max-height:85vh; /* <<< aumenta/diminui aqui se quiser */
-                background:#000;
-                border:1px solid #ccc;
-                border-radius:var(--radius);
-                object-fit:contain;
+                display:block;width:100%;height:auto;max-height:85vh;
+                background:#000;border:1px solid #ccc;border-radius:var(--radius);object-fit:contain;
             }}
-
             .hint{{color:#555}}
+            .topbar{{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
+            a.link{{text-decoration:none;color:#333}}
         </style>
     </head>
     <body>
-        <h1>Câmera Tuya - Visualização em tempo real</h1>
+        <div class="topbar">
+            <h1>Câmera Tuya - Visualização em tempo real</h1>
+            <a class="link" href="/logout">Sair</a>
+        </div>
 
         <div class="row">
             <div class="card live">
@@ -317,7 +440,6 @@ def index():
         </div>
 
         <script>
-        // Tela cheia do container da camera
         function toggleFull(){{
             const box = document.getElementById('liveBox');
             if (!document.fullscreenElement){{
@@ -326,7 +448,6 @@ def index():
                 if (document.exitFullscreen) document.exitFullscreen();
             }}
         }}
-
         async function abrir() {{
             const btn = document.getElementById('btn');
             const status = document.getElementById('status');
@@ -336,8 +457,7 @@ def index():
                 const r = await fetch('/gate/pulse', {{
                     method: 'POST',
                     headers: {{'Content-Type':'application/json'}},
-                    body: JSON.stringify({{}})
-                }});
+                    body: JSON.stringify({{}}) }});
                 const data = await r.json();
                 if (!r.ok || !data.ok) {{
                     status.textContent = "Falha: " + (data.error || r.statusText);
@@ -355,16 +475,19 @@ def index():
     </html>
     """
 
-# =========================================
+# index redireciona pro app ou login
+@app.route("/")
+def index():
+    if session.get("user_id"):
+        return redirect(url_for("app_home"))
+    return redirect(url_for("login"))
+
 # Healthcheck
-# =========================================
 @app.route('/health')
 def health():
     return "ok"
 
-# =========================================
 # Main
-# =========================================
 if __name__ == '__main__':
     # threaded=True mantém o stream fluido e o botão responsivo
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
