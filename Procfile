@@ -1,1 +1,1 @@
-web: gunicorn camera:app
+gunicorn camera:app
