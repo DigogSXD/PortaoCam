@@ -212,6 +212,12 @@ def login():
             if db.is_active: db.close()
     return render_template("login.html", error=error)
 
+@app.route("/logout")
+def logout():
+    """Limpa a sessão do usuário e o redireciona para a página de login."""
+    session.clear()
+    return redirect(url_for("login"))
+    
 @app.route('/app')
 @login_required
 def app_home(): return render_template("app.html", device_id_gate=DEVICE_ID_GATE, tuya_code=TUYA_CODE, pulse_ms=PULSE_MS)
@@ -225,3 +231,4 @@ def video_feed():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+
