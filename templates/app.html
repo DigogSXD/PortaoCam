@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <title>Tuya Camera + Portão</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="topbar">
+        <h1>Câmera Tuya - Visualização em tempo real</h1>
+        <a class="link" href="/logout">Sair</a>
+    </div>
+
+    <div class="row">
+        <div class="card live">
+            <div class="toolbar">
+                <div class="hint">
+                    Se não aparecer, veja <a href="/debug_stream" target="_blank">/debug_stream</a>.
+                </div>
+                <button onclick="toggleFull()">⛶ Tela cheia</button>
+            </div>
+            <div id="liveBox" class="video-box">
+                <img id="liveImg" src="/video_feed" alt="Tuya Camera Stream">
+            </div>
+        </div>
+
+        <div class="card gate">
+            <h3>Portão</h3>
+            <p>Dispositivo: <b>{{ device_id_gate or '(defina TUYA_DEVICE_ID no .env)' }}</b><br>
+                Code: <b>{{ tuya_code or '(defina TUYA_CODE no .env)' }}</b><br>
+                Pulso: <b>{{ pulse_ms }} ms</b></p>
+            <button id="btn" onclick="abrir()">🔓 Abrir portão</button>
+            <div id="status" class="hint"></div>
+        </div>
+    </div>
+
+    <script>
+    function toggleFull(){
+        const box = document.getElementById('liveBox');
+        if (!document.fullscreenElement){
+            if (box.requestFullscreen) box.requestFullscreen();
+        } else {
+            if (document.exitFullscreen) document.exitFullscreen();
+        }
+    }
+    async function abrir() {
+        const btn = document.getElementById('btn');
+        const status = document.getElementById('status');
+        btn.disabled = true;
+        status.textContent = "Acionando portão...";
+        try {
+            const r = await fetch('/gate/pulse', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({}) });
+            const data = await r.json();
+            if (!r.ok || !data.ok) {
+                status.textContent = "Falha: " + (data.error || r.statusText);
+            } else {
+                status.textContent = "OK!\nON: " + JSON.stringify(data.on) + "\nOFF: " + JSON.stringify(data.off);
+            }
+        } catch (e) {
+            status.textContent = "Erro de rede: " + e;
+        } finally {
+            setTimeout(() => { btn.disabled = false; }, 1500);
+        }
+    }
+    </script>
+</body>
+</html>

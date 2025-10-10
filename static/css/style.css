@@ -1,0 +1,125 @@
+/* Estilos Gerais e para o Login */
+:root {
+    --gap: 24px;
+    --radius: 12px;
+    --card-shadow: 0 2px 8px rgba(0,0,0,.05);
+}
+
+* { box-sizing: border-box; }
+
+body { 
+    font-family: system-ui, Segoe UI, Arial; 
+    margin: 24px; 
+    background: #f5f6f8; 
+}
+
+/* Estilos da página de Login */
+body:has(form.card) {
+    display: grid;
+    place-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+form.card { 
+    width: 360px; 
+}
+
+input { 
+    width: 100%; 
+    padding: 12px; 
+    margin: 6px 0 12px 0; 
+    border: 1px solid #ccc; 
+    border-radius: 8px; 
+}
+
+.err { 
+    color: #c0392b; 
+    margin-bottom: 8px; 
+}
+
+
+/* Estilos da página da Câmera (app.html) */
+.row {
+    display: flex;
+    gap: var(--gap);
+    align-items: flex-start;
+    flex-wrap: wrap; /* Permite que os itens quebrem a linha em telas pequenas */
+}
+
+.card {
+    border: 1px solid #ddd;
+    border-radius: var(--radius);
+    padding: 16px;
+    box-shadow: var(--card-shadow);
+    background: #fff;
+}
+
+/* === A MUDANÇA PRINCIPAL ESTÁ AQUI === */
+.card.live {
+    /* flex: grow shrink basis */
+    /* Deixamos ele crescer (2) mais que o outro (1) mas com uma base de 600px */
+    flex: 2 1 600px;
+    min-width: 320px; /* Garante que não fique muito pequeno */
+}
+
+.card.gate {
+    flex: 1 1 300px; /* Cresce menos, base de 300px */
+    max-width: 100%;
+}
+
+.toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: space-between;
+}
+
+button {
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 1px solid #888;
+    cursor: pointer;
+    background: #fafafa;
+}
+
+button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+#status {
+    margin-top: 8px;
+    font-family: Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.video-box {
+    position: relative;
+    width: 100%;
+}
+
+.video-box img {
+    display: block;
+    width: 100%;
+    height: auto;
+    /* max-height: 85vh; (removido para não distorcer o layout flex) */
+    background: #000;
+    border: 1px solid #ccc;
+    border-radius: var(--radius);
+    object-fit: contain;
+}
+
+.hint { color: #555; }
+
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+a.link { text-decoration: none; color: #333; }
