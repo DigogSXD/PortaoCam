@@ -9,6 +9,7 @@ import requests
 import cv2
 import datetime
 import getpass
+import click
 
 from functools import wraps
 from urllib.parse import quote_plus
@@ -16,19 +17,23 @@ from flask import Flask, Response, jsonify, request, redirect, url_for, render_t
 from tuya_connector import TuyaOpenAPI, TUYA_LOGGER
 from dotenv import load_dotenv
 
+# --- Bibliotecas para API ---
 from flask_bcrypt import Bcrypt
 import jwt
 
+# --- DB (SQLAlchemy) ---
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base, scoped_session
 
+# =========================================
 # CONFIGURAÇÃO INICIAL
+# =========================================
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "sua-chave-secreta-muito-forte")
 bcrypt = Bcrypt(app)
 
-# CONFIGURAÇÃO DO BANCO DE DADOS
+# --- Configuração do Banco de Dados ---
 def _build_engine_from_env():
     host, name, user, pwd, port = (
         os.getenv("DB_HOST"), os.getenv("DB_NAME", "defaultdb"),
@@ -52,7 +57,7 @@ class User(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# CONFIGURAÇÃO DA TUYA
+# --- Configuração da Tuya ---
 ACCESS_ID, ACCESS_KEY, API_ENDPOINT, DEVICE_ID_CAMERA = (
     os.getenv("TUYA_ACCESS_ID"), os.getenv("TUYA_ACCESS_KEY"),
     os.getenv("TUYA_API_ENDPOINT", "https://openapi.tuyaus.com"),
@@ -67,7 +72,9 @@ REGION, CLIENT_ID, CLIENT_SECRET, DEVICE_ID_GATE, TUYA_CODE, PULSE_MS = (
 openapi = TuyaOpenAPI(API_ENDPOINT, ACCESS_ID, ACCESS_KEY)
 if ACCESS_ID and ACCESS_KEY: openapi.connect()
 
-# FUNÇÕES AUXILIARES
+# =========================================
+# FUNÇÕES AUXILIARES (CÂMERA E PORTÃO)
+# =========================================
 _last_stream_resp, _last_stream_url, _last_error = None, None, None
 def _allocate_stream():
     global _last_stream_resp, _last_stream_url, _last_error; _last_error = None
@@ -125,7 +132,9 @@ def pulse_gate():
     resp_off = send_command_hmac(token, [{"code": TUYA_CODE, "value": False}])
     return resp_on, resp_off
 
+# =========================================
 # DECORATORS DE AUTENTICAÇÃO
+# =========================================
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -137,8 +146,8 @@ def token_required(f):
         try:
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
             db = SessionLocal(); user = db.query(User).filter_by(id=data['user_id']).first(); db.close()
-            if not user: raise Exception()
-        except Exception: return jsonify({'message': 'Token inválido ou expirado!'}), 401
+            if not user: raise Exception("Usuário do token não encontrado")
+        except Exception as e: return jsonify({'message': f'Token inválido ou expirado: {e}'}), 401
         return f(user, *args, **kwargs)
     return decorated
 
@@ -148,6 +157,20 @@ def login_required(f):
         if not session.get("user_id"): return redirect(url_for("login", next=request.path))
         return f(*args, **kwargs)
     return wrapper
+
+# =========================================
+# API ENDPOINTS PARA O APP FLUTTER
+# =========================================
+@app.route('/api/register', methods=['POST'])
+def register_api():
+    data = request.get_json()
+    if not data or not data.get('email') or not data.get('password'): return jsonify({'message': 'Email e senha são obrigatórios'}), 400
+    db = SessionLocal()
+    if db.query(User).filter_by(email=data['email']).first(): db.close(); return jsonify({'message': 'Usuário já existe'}), 409
+    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
+    new_user = User(email=data['email'], password_hash=hashed_password)
+    db.add(new_user); db.commit(); db.close()
+    return jsonify({'message': 'Novo usuário criado!'}), 201
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
@@ -173,10 +196,17 @@ def gate_pulse_api(current_user):
         return jsonify({"ok": True, "on_response": resp_on, "off_response": resp_off})
     except Exception as e: return jsonify({"ok": False, "error": str(e)}), 500
 
-# WEB APP ROUTES
+# =========================================
+# ROTAS DA INTERFACE WEB
+# =========================================
 @app.route("/")
 def index():
     if session.get("user_id"): return redirect(url_for("app_home"))
+    return redirect(url_for("login"))
+
+@app.route("/logout")
+def logout():
+    session.clear()
     return redirect(url_for("login"))
 
 @app.route("/login", methods=["GET", "POST"])
@@ -211,13 +241,29 @@ def login():
         finally:
             if db.is_active: db.close()
     return render_template("login.html", error=error)
-
-@app.route("/logout")
-def logout():
-    """Limpa a sessão do usuário e o redireciona para a página de login."""
-    session.clear()
-    return redirect(url_for("login"))
     
+@app.route("/register", methods=["GET", "POST"])
+def register_web():
+    error = None
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "").strip()
+        if not email or not password: error = "Email e senha são obrigatórios."
+        else:
+            db = SessionLocal()
+            try:
+                if db.query(User).filter_by(email=email).first(): error = f"O email '{email}' já está cadastrado."
+                else:
+                    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+                    new_user = User(email=email, password_hash=hashed_password)
+                    db.add(new_user); db.commit()
+                    flash('Usuário criado com sucesso! Por favor, faça o login.', 'success')
+                    db.close()
+                    return redirect(url_for("login"))
+            finally:
+                if db.is_active: db.close()
+    return render_template("register.html", error=error)
+
 @app.route('/app')
 @login_required
 def app_home(): return render_template("app.html", device_id_gate=DEVICE_ID_GATE, tuya_code=TUYA_CODE, pulse_ms=PULSE_MS)
@@ -229,6 +275,76 @@ def video_feed():
     if not url: return Response(_as_mjpeg_error(_last_error or "Falha"), mimetype='multipart/x-mixed-replace; boundary=frame')
     return Response(generate_frames(url), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/video_feed_for_app')
+def video_feed_for_app():
+    token = request.args.get('token')
+    if not token: return Response(_as_mjpeg_error("Token não fornecido."), mimetype='multipart/x-mixed-replace; boundary=frame')
+    try:
+        data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+        db = SessionLocal()
+        user = db.query(User).filter_by(id=data['user_id']).first()
+        db.close()
+        if not user: raise Exception("Usuário do token não encontrado")
+    except Exception as e:
+        print(f"Erro de validação de token no video_feed_for_app: {e}")
+        return Response(_as_mjpeg_error("Token inválido ou expirado."), mimetype='multipart/x-mixed-replace; boundary=frame')
+    url = _allocate_stream()
+    if not url: return Response(_as_mjpeg_error(_last_error or "Falha ao alocar stream."), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate_frames(url), mimetype='multipart/x-mixed-replace; boundary=frame')
+    
+# =========================================
+#  COMANDOS DE TERMINAL PARA GERENCIAR USUÁRIOS
+# =========================================
+@app.cli.command("create-user")
+def create_user_command():
+    email = input("Digite o email: ")
+    if not email: print("Erro: Email vazio."); return
+    db = SessionLocal()
+    if db.query(User).filter_by(email=email).first(): print(f"Erro: Usuário '{email}' já existe."); db.close(); return
+    password = getpass.getpass("Digite a senha: ")
+    if not password: print("Erro: Senha vazia."); db.close(); return
+    hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+    new_user = User(email=email.lower(), password_hash=hashed_password)
+    db.add(new_user); db.commit()
+    print(f"Usuário '{email}' criado com sucesso!"); db.close()
+
+@app.cli.command("list-users")
+def list_users_command():
+    db = SessionLocal(); users = db.query(User).all(); db.close()
+    if not users: print("Nenhum usuário encontrado."); return
+    print("--- Lista de Usuários ---")
+    for user in users: print(f"ID: {user.id} | Email: {user.email}")
+    print("-------------------------")
+
+@app.cli.command("delete-user")
+def delete_user_command():
+    user_id_str = input("Digite o ID do usuário a excluir: ")
+    try: user_id = int(user_id_str)
+    except ValueError: print("Erro: ID precisa ser um número."); return
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user: print(f"Erro: Usuário com ID {user_id} não encontrado."); return
+        confirm = input(f"Tem certeza que deseja excluir '{user.email}' (ID: {user_id})? [s/N]: ")
+        if confirm.lower() == 's':
+            db.delete(user); db.commit()
+            print(f"Usuário '{user.email}' excluído com sucesso!")
+        else: print("Operação cancelada.")
+    finally: db.close()
+
+@app.cli.command("update-user-email")
+@click.argument("user_id")
+@click.argument("new_email")
+def update_user_email_command(user_id, new_email):
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(id=user_id).first()
+        if not user: print(f"Erro: Usuário com ID {user_id} não encontrado."); return
+        existing_user = db.query(User).filter(User.email == new_email, User.id != user_id).first()
+        if existing_user: print(f"Erro: O email '{new_email}' já está em uso."); return
+        old_email = user.email; user.email = new_email; db.commit()
+        print(f"Email do usuário ID {user_id} alterado de '{old_email}' para '{new_email}'!")
+    finally: db.close()
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
-
