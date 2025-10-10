@@ -149,18 +149,6 @@ def login_required(f):
         return f(*args, **kwargs)
     return wrapper
 
-# API ENDPOINTS
-@app.route('/api/register', methods=['POST'])
-def register():
-    data = request.get_json()
-    if not data or not data.get('email') or not data.get('password'): return jsonify({'message': 'Email e senha são obrigatórios'}), 400
-    db = SessionLocal()
-    if db.query(User).filter_by(email=data['email']).first(): db.close(); return jsonify({'message': 'Usuário já existe'}), 409
-    hashed_password = bcrypt.generate_password_hash(data['password']).decode('utf-8')
-    new_user = User(email=data['email'], password_hash=hashed_password)
-    db.add(new_user); db.commit(); db.close()
-    return jsonify({'message': 'Novo usuário criado!'}), 201
-
 @app.route('/api/login', methods=['POST'])
 def api_login():
     auth = request.get_json()
