@@ -52,3 +52,51 @@ Siga os passos abaixo para rodar o projeto localmente.
 ```bash
 git clone <url-do-seu-repositorio>
 cd <nome-da-pasta>
+```
+
+### 3. Crie um Ambiente Virtual e Instale as Dependências
+
+É uma boa prática usar um ambiente virtual para isolar as dependências do projeto.
+
+# Crie o ambiente virtual
+python -m venv venv
+
+# Ative o ambiente (Windows)
+.\venv\Scripts\activate
+
+# Ative o ambiente (Linux/macOS)
+source venv/bin/activate
+
+# Crie um arquivo requirements.txt com o conteúdo abaixo e instale
+pip install -r requirements.txt
+
+### Exemplo env
+# Chave secreta para o Flask (gere uma chave forte e aleatória)
+# python -c 'import secrets; print(secrets.token_hex(16))'
+SECRET_KEY="sua_chave_secreta_aqui"
+
+# --- Configuração do Banco de Dados ---
+DB_HOST="localhost"
+DB_NAME="tuya_controller_db"
+DB_USER="seu_usuario_db"
+DB_PASSWORD="sua_senha_db"
+DB_PORT="3306"
+
+# --- Credenciais Tuya (Cloud Project API) ---
+# Usadas para obter o stream da câmera
+TUYA_ACCESS_ID="seu_access_id"
+TUYA_ACCESS_KEY="seu_access_key"
+TUYA_API_ENDPOINT="[https://openapi.tuyaus.com](https://openapi.tuyaus.com)" # Ou o endpoint da sua região
+
+# --- Credenciais Tuya (HMAC Signature) ---
+# Usadas para enviar comandos para o portão
+TUYA_CLIENT_ID="seu_client_id"
+TUYA_CLIENT_SECRET="seu_client_secret"
+TUYA_REGION="openapi.tuyaus.com" # Ou a região do seu datacenter
+
+# --- IDs e Códigos dos Dispositivos ---
+TUYA_DEVICE_ID_CAMERA="id_do_dispositivo_da_camera"
+TUYA_DEVICE_ID_GATE="id_do_dispositivo_do_portao"
+TUYA_CODE="switch_1" # Código do comando para o relé/portão (ex: switch_1)
+PULSE_MS=800 # Duração do pulso em milissegundos
+
