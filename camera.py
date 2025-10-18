@@ -103,10 +103,15 @@ EMPTY_BODY_SHA256, _cached_hmac_token, _token_expires_at = "e3b0c44298fc1c149afb
 def now_ms(): return str(int(time.time() * 1000))
 def hmac_upper(msg, secret): return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest().upper()
 def build_string_to_sign(method, content_sha256, headers_block, path): return f"{method}\n{content_sha256}\n{headers_block}\n{path}"
+# CÓDIGO CORRIGIDO
 def get_token_hmac():
     global _cached_hmac_token, _token_expires_at
     if _cached_hmac_token and time.time() < (_token_expires_at - 60): return _cached_hmac_token
-    path, url = "/v1.0/token?grant_type=1", f"https://{REGION}{path}"
+    
+    # Linhas corrigidas aqui:
+    path = "/v1.0/token?grant_type=1"
+    url = f"https://{REGION}{path}"
+
     t, nonce = now_ms(), uuid.uuid4().hex
     string_to_sign = build_string_to_sign("GET", EMPTY_BODY_SHA256, "", path)
     sign = hmac_upper(CLIENT_ID + t + nonce + string_to_sign, CLIENT_SECRET)
@@ -361,3 +366,4 @@ def update_user_email_command(user_id, new_email):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+
