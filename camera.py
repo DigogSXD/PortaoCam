@@ -268,6 +268,19 @@ def register_web():
 @login_required
 def app_home(): return render_template("app.html", device_id_gate=DEVICE_ID_GATE, tuya_code=TUYA_CODE, pulse_ms=PULSE_MS)
 
+# === NOVA ROTA PARA O SITE (A SOLUÇÃO) ===
+# Esta rota usa @login_required (sessão) e responde em JSON, 
+# exatamente o que o JavaScript da sua página precisa.
+@app.route('/gate/pulse', methods=['POST'])
+@login_required
+def gate_pulse_web():
+    try:
+        resp_on, resp_off = pulse_gate()
+        return jsonify({"ok": True, "on_response": resp_on, "off_response": resp_off})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+# =========================================
+
 @app.route('/video_feed')
 @login_required
 def video_feed():
